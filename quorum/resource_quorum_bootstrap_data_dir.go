@@ -9,10 +9,11 @@ import (
 	"path"
 	"time"
 
-	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/peterbourgon/mergemap"
 
 	"github.com/ethereum/go-ethereum/core"
-
+	"github.com/ethereum/go-ethereum/node"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 )
 
@@ -81,9 +82,16 @@ func resourceBootstrapDataDirCreate(d *schema.ResourceData, rawConfigurer interf
 			return fmt.Errorf("directory [%s] is not empty", absDir)
 		}
 	}
-	genesisJson := d.Get("genesis").(string)
+	genesisJson := []byte(d.Get("genesis").(string))
 	var genesis *core.Genesis
-	if err := json.Unmarshal([]byte(genesisJson), &genesis); err != nil {
+	var miniGenesis *struct {
+		Config map[string]interface{} `json:"config"`
+	}
+	if err := json.Unmarshal(genesisJson, &genesis); err != nil {
+		return err
+	}
+	log.Printf("[DEBUG] Reading ChainConfig as raw data")
+	if err := json.Unmarshal(genesisJson, &miniGenesis); err != nil {
 		return err
 	}
 	// init datadir
@@ -96,15 +104,39 @@ func resourceBootstrapDataDirCreate(d *schema.ResourceData, rawConfigurer interf
 		if err != nil {
 			return fmt.Errorf("can't open database for %s due to %s", name, err)
 		}
-		_, _, err = core.SetupGenesisBlock(chaindb, genesis)
+		savedChainConfig, blockHash, err := core.SetupGenesisBlock(chaindb, genesis)
 		if err != nil {
 			return fmt.Errorf("can't setup genesis for %s due to %s", name, err)
+		}
+		// let's merge the ChainConfig and save into the database
+		mergedChainConfig, err := merge(savedChainConfig, miniGenesis.Config)
+		if err != nil {
+			return fmt.Errorf("can't merge ChainConfig due to %v", err)
+		}
+		// this is a workaround as Ethereum doesn't export the config key
+		if err := chaindb.Put(append([]byte("ethereum-config-"), blockHash.Bytes()...), mergedChainConfig); err != nil {
+			return err
 		}
 		log.Printf("[DEBUG] Successfully wrote genesis state: database=%s, dir=%s", name, absDir)
 	}
 	_ = d.Set("data_dir_abs", absDir)
 	d.SetId(fmt.Sprintf("%d", time.Now().UnixNano()))
 	return nil
+}
+
+func merge(config *params.ChainConfig, dst map[string]interface{}) ([]byte, error) {
+	// convert to map[string]interface{}
+	configData, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	var src map[string]interface{}
+	if err := json.Unmarshal(configData, &src); err != nil {
+		return nil, err
+	}
+	// now merge
+	mergedConfig := mergemap.Merge(dst, src)
+	return json.Marshal(mergedConfig)
 }
 
 func resourceBootstrapDataDirRead(_ *schema.ResourceData, _ interface{}) error {

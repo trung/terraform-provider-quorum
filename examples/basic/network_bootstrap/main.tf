@@ -1,5 +1,5 @@
 variable "network_name" {
-  type        = "string"
+  type        = string
   description = "Name of the network"
 }
 
@@ -70,7 +70,8 @@ resource "local_file" "genesis" {
       "eip150Hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
       "eip158Block": 0,
       "isQuorum": true,
-      "maxCodeSize": 50
+      "maxCodeSize": 50,
+      "something": "new"
     },
     "difficulty": "0x0",
     "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000",
